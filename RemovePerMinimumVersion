@@ -1,0 +1,86 @@
+For reference, I've put this together before that loads the hives, removes the instance and then registry. It also creates a registry entry as I deploy via SCCM.
+
+# Define minimum acceptable version (replace with your desired version)
+$minVersion = "1.6.0.27573"
+
+############### Do Not Edit Below This Line #################################
+
+###Finding SIDs for loop
+# Regex pattern for SIDs
+$PatternSID = 'S-1-5-21-\d+-\d+\-\d+\-\d+$'
+ 
+# Get Username, SID, and location of ntuser.dat for all users
+$ProfileList = gp 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*' | Where-Object {$_.PSChildName -match $PatternSID} | 
+    Select  @{name="SID";expression={$_.PSChildName}}, 
+            @{name="UserHive";expression={"$($_.ProfileImagePath)\ntuser.dat"}}, 
+            @{name="Username";expression={$_.ProfileImagePath -replace '^(.*[\\\/])', ''}}
+ 
+# Get all user SIDs found in HKEY_USERS (ntuder.dat files that are loaded)
+$LoadedHives = gci Registry::HKEY_USERS | ? {$_.PSChildname -match $PatternSID} | Select @{name="SID";expression={$_.PSChildName}}
+ 
+# Get all users that are not currently logged
+$UnloadedHives = Compare-Object $ProfileList.SID $LoadedHives.SID | Select @{name="SID";expression={$_.InputObject}}, UserHive, Username
+ 
+# Loop through each profile on the machine
+Foreach ($item in $ProfileList) {
+  # Load User ntuser.dat if it's not already loaded
+  IF ($item.SID -in $UnloadedHives.SID) {
+    reg load HKU\$($Item.SID) $($Item.UserHive) | Out-Null
+  }
+
+  #####################################################################
+  # Check and potentially remove outdated Teams versions
+
+  # Get Teams uninstall keys for the user
+  $teamsUninstallKeys = Get-ItemProperty registry::HKEY_USERS\$($item.SID)\Software\Microsoft\Windows\CurrentVersion\Uninstall\Teams*
+
+  if ($teamsUninstallKeys) {
+    foreach ($teamsKey in $teamsUninstallKeys) {
+      # Check DisplayVersion and remove key if outdated (with confirmation)
+      $displayVersion = $teamsKey.DisplayVersion
+
+      if ($displayVersion -lt $minVersion) {
+        $uninstallString = "C:\Users\$($item.Username)\appdata\local\microsoft\teams\update"
+          # Consider error handling for uninstall process (not shown here)
+          try {
+            Start-Process -FilePath $uninstallString -ArgumentList "--uninstall" -Wait -Verb RunAsAdministrator
+        } catch {
+        }
+
+        # Remove the Teams uninstall key (use with caution)
+          Remove-Item -Path "registry::HKEY_USERS\$($item.SID)\Software\Microsoft\Windows\CurrentVersion\Uninstall\$($teamsKey.PSName)" -Recurse}
+  }
+
+}  # Unload ntuser.dat
+  IF ($item.SID -in $UnloadedHives.SID) {
+    [gc]::Collect()
+    reg unload HKU\$($item.SID) | Out-Null
+  }
+}
+
+################## CREATING TeamsUninstaller value for SCCM Tattoo ######################
+
+# Try creating/setting "TeamsUninstaller" value (requires admin privileges)
+try {
+  # Check if key exists
+  if (Test-Path "HKLM:\SOFTWARE\SCCMTatoo") {
+    # Get existing value (if any)
+    $existingValue = Get-ItemProperty "HKLM:\SOFTWARE\SCCMTatoo" -Name "TeamsUninstaller"
+    
+    # Check if value doesn't exist or doesn't match minimum version
+    if (-not $existingValue -or $existingValue.TeamsUninstaller -ne $minVersion) {
+      New-ItemProperty -Path "HKLM:\SOFTWARE\SCCMTatoo" -Name "TeamsUninstaller" -PropertyType String -Value $minVersion -Force
+      Write-Host "Successfully added/updated 'TeamsUninstaller' value with minimum Teams version: $minVersion"
+    } else {
+      Write-Host "'TeamsUninstaller' value already exists with the same minimum Teams version: $minVersion"
+    }
+  } else {
+    # Create the key if it doesn't exist
+    New-Item -Path "HKLM:\SOFTWARE\SCCMTatoo" -Force | Out-Null
+    New-ItemProperty -Path "HKLM:\SOFTWARE\SCCMTatoo" -Name "TeamsUninstaller" -PropertyType String -Value $minVersion -Force
+    Write-Host "Successfully added registry key and 'TeamsUninstaller' value with minimum Teams version: $minVersion"
+  }
+} catch {
+  # Handle potential errors
+  Write-Warning "Error creating/setting registry value: $($_.Exception.Message)"
+}
