@@ -1,7 +1,7 @@
 For reference, I've put this together before that loads the hives, removes the instance and then registry. It also creates a registry entry as I deploy via SCCM.
 
 # Define minimum acceptable version (replace with your desired version)
-$minVersion = "1.6.0.27573"
+$minVersion = "1.6.00.27574"
 
 ############### Do Not Edit Below This Line #################################
 
