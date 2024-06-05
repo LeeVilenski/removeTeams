@@ -1,7 +1,5 @@
-For reference, I've put this together before that loads the hives, removes the instance and then registry. It also creates a registry entry as I deploy via SCCM.
-
 # Define minimum acceptable version (replace with your desired version)
-$minVersion = "1.6.00.27574"
+$minVersion = "1.6.00.27575"
 
 ############### Do Not Edit Below This Line #################################
 
@@ -58,6 +56,32 @@ Foreach ($item in $ProfileList) {
   }
 }
 
+################## Remove Teams where Regkey doesn't exist #############################
+
+$userProfiles = Get-ChildItem -Path "C:\Users" -Directory -Exclude Default,Public
+# Loop through each user profile
+foreach ($profile in $userProfiles) {
+  # Check if Teams executable exists
+  $teamsPath = Join-Path -Path $profile.FullName -ChildPath "AppData\Local\Microsoft\Teams\current\Teams.exe"
+  if (Test-Path $teamsPath) {
+    # Get the installed version
+    $installedVersion = (Get-ItemProperty $teamsPath).VersionInfo.FileVersion
+
+    # Check version - inform about outdated and above versions
+    if ($installedVersion -lt $minVersion) {
+      Write-Host "Outdated Teams version found in $($profile): $installedVersion"
+      # Uninstall Teams (requires admin privileges)
+      Remove-Item -Path $teamsPath -Recurse -Force -ErrorAction SilentlyContinue
+      if ($?) {
+        Write-Host "Uninstalled Teams from $profile successfully."
+      } else {
+        Write-Host "Failed to uninstall Teams from $profile."
+      }
+    } else {
+      Write-Host "Teams version in $profile ($installedVersion) is above or meets the minimum requirement."
+    }
+  }
+}
 ################## CREATING TeamsUninstaller value for SCCM Tattoo ######################
 
 # Try creating/setting "TeamsUninstaller" value (requires admin privileges)
